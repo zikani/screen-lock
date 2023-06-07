@@ -2,6 +2,7 @@ import os
 import sys
 import getpass
 import csv
+import logging
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -17,9 +18,10 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QMessageBox,
+    QSlider,QHBoxLayout
 )
 from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter,  QColor, QLinearGradient
-from PyQt5.QtCore import Qt, pyqtSignal, QSettings
+from PyQt5.QtCore import Qt, pyqtSignal, QSettings,QTimer
 
 
 
@@ -151,13 +153,8 @@ class MainWindow(QWidget):
 
 
 
-import logging
-from PyQt5.QtCore import pyqtSignal, Qt, QTimer, QSettings
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QPushButton, QLabel, QCheckBox, QSlider,
-    QHBoxLayout, QFileDialog, QMessageBox, QInputDialog, QLineEdit
-)
+
+
 #--------------------------------------------------------------------------------------------------------
 #----------------------------------------------------------------------------------------------------------------
 #------------------------------------------------------------------------------------------------------------------
