@@ -1,782 +1,907 @@
+from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QHBoxLayout
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont, QCursor
+import json
 import os
 import sys
-import getpass
-import csv
-import logging
-from PyQt5.QtWidgets import (
-    QApplication,
-    QWidget,
-    QLabel,
-    QPushButton,
-    QVBoxLayout,
-    QDialog,
-    QSizePolicy,
-    QDesktopWidget,
-    QFileDialog,
-    QInputDialog,
-    QLineEdit,
-    QCheckBox,
-    QComboBox,
-    QMessageBox,
-    QSlider,QHBoxLayout
-)
-from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter,  QColor, QLinearGradient
-from PyQt5.QtCore import Qt, pyqtSignal, QSettings,QTimer
+import hashlib
+import random
+import string
 
-
-
-__version__ = "1.0.0"
-
-
-class BackgroundWidget(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.background_image = QPixmap("path/to/background/image")
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        painter.drawPixmap(self.rect(), self.background_image)
-
-class MainWindow(QWidget):
+class SettingsPanel(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.init_ui()
+        self.setWindowTitle("Lock Screen Settings")
+        self.setMinimumSize(500, 700)
+        self.settings = self.load_settings()
 
-    def init_ui(self):
-        self.setWindowTitle('Screen Lock')
-        self.setFixedSize(470, 470)
-        self.setWindowIcon(QIcon('path/to/lock_icon.png'))
-        self.center_window()
+        # Initialize inactivity timer
+        self.inactivity_timer = QTimer()
+        self.inactivity_timer.timeout.connect(self.lock_screen)
+        self.reset_inactivity_timer()
 
-        pc_username = getpass.getuser()
+        # Track mouse movements to detect inactivity
+        self.setMouseTracking(True)
+        self.installEventFilter(self)
 
-       
-        font = QFont('Arial', 16, QFont.Bold)
+        # Initialize LockScreen instance
+        self.screen_lock = None
 
-        style_sheet = 'color: #ffffff; background-color: #0088cc; padding: 10px; border-radius: 5px;'
+        # Create layout
+        layout = QtWidgets.QVBoxLayout()
 
-        hello_label = QLabel("Hello")
-        hello_label.setAlignment(Qt.AlignCenter)
-        hello_label.setFont(font)
-        hello_label.setStyleSheet(style_sheet)
+        # Create a tab widget for better organization
+        self.tab_widget = QtWidgets.QTabWidget()
 
-        username_label = QLabel(pc_username)
-        username_label.setAlignment(Qt.AlignCenter)
-        username_label.setFont(font)
-        username_label.setStyleSheet(style_sheet)
+        # --- General Tab ---
+        general_tab = QtWidgets.QWidget()
+        general_layout = QtWidgets.QVBoxLayout()
 
-        welcome_label = QLabel("Welcome to Screen Lock App")
-        welcome_label.setAlignment(Qt.AlignCenter)
-        welcome_label.setFont(font)
-        welcome_label.setStyleSheet(style_sheet)
+        # Theme selection
+        theme_layout = QtWidgets.QHBoxLayout()
+        theme_label = QtWidgets.QLabel("Theme:")
+        self.theme_combo = QtWidgets.QComboBox()
+        self.theme_combo.addItems(["Light", "Dark", "Custom"])
+        self.theme_combo.setCurrentText(self.settings.get('theme', 'Dark'))
+        self.theme_combo.currentTextChanged.connect(self.apply_theme)
+        theme_layout.addWidget(theme_label)
+        theme_layout.addWidget(self.theme_combo)
+        general_layout.addLayout(theme_layout)
 
-        settings_button = QPushButton('Settings')
-        settings_button.clicked.connect(self.open_settings)
-        settings_button.setFixedHeight(70)
-        settings_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        settings_button.setStyleSheet('font-size: 20px;')
-        settings_button.setStyleSheet('QPushButton:pressed { background-color: #990000; }')
+        # Timeout settings
+        timeout_layout = QtWidgets.QHBoxLayout()
+        timeout_label = QtWidgets.QLabel("Lock screen timeout (minutes):")
+        self.timeout_spinbox = QtWidgets.QSpinBox()
+        self.timeout_spinbox.setValue(self.settings.get('timeout', 5))
+        self.timeout_spinbox.setRange(1, 60)
+        self.timeout_spinbox.setToolTip("Set the time (in minutes) after which the screen locks automatically.")
+        timeout_layout.addWidget(timeout_label)
+        timeout_layout.addWidget(self.timeout_spinbox)
+        general_layout.addLayout(timeout_layout)
 
-        lock_button = QPushButton('Lock Screen')
-        lock_button.clicked.connect(self.lock_screen)
-        lock_button.setFixedHeight(70)
-        lock_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        lock_button.setStyleSheet('font-size: 40px; background-color: #FF0000;')
-        lock_button.setStyleSheet('QPushButton:hover { background-color: #FF6666; }')
-        lock_button.setStyleSheet('QPushButton:pressed { background-color: #990000; }')
+        # Hot corners toggle
+        self.hot_corners_checkbox = QtWidgets.QCheckBox("Enable hot corners to prevent lock")
+        self.hot_corners_checkbox.setChecked(self.settings.get('hot_corners', False))
+        self.hot_corners_checkbox.setToolTip("Move the cursor to a corner to prevent the screen from locking.")
+        general_layout.addWidget(self.hot_corners_checkbox)
 
-        layout = QVBoxLayout()
-        layout.addWidget(hello_label)
-        layout.addWidget(username_label)
-        layout.addWidget(welcome_label)
-        layout.addWidget(settings_button)
-        layout.addWidget(lock_button)
-        layout.addStretch()
+        # Lock on startup option
+        self.lock_on_startup_checkbox = QtWidgets.QCheckBox("Lock screen on system startup")
+        self.lock_on_startup_checkbox.setChecked(self.settings.get('lock_on_startup', False))
+        self.lock_on_startup_checkbox.setToolTip("Automatically lock screen when system starts.")
+        general_layout.addWidget(self.lock_on_startup_checkbox)
 
-        version_label = QLabel(f"Version: {__version__}")
-        version_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(version_label)
+        # Lock on sleep/hibernate option
+        self.lock_on_sleep_checkbox = QtWidgets.QCheckBox("Lock screen on sleep/hibernate")
+        self.lock_on_sleep_checkbox.setChecked(self.settings.get('lock_on_sleep', True))
+        self.lock_on_sleep_checkbox.setToolTip("Automatically lock screen when system goes to sleep or hibernates.")
+        general_layout.addWidget(self.lock_on_sleep_checkbox)
 
-        main_widget = QWidget()
-        main_widget.setLayout(layout)
+        general_tab.setLayout(general_layout)
 
-        self.user_credentials = None
+        # --- Security Tab ---
+        security_tab = QtWidgets.QWidget()
+        security_layout = QtWidgets.QVBoxLayout()
 
-        background_widget = BackgroundWidget()
-        background_layout = QVBoxLayout()
-        background_layout.addWidget(background_widget)
-        background_layout.addWidget(main_widget)
+        # Password configuration
+        password_group = QtWidgets.QGroupBox("Password Configuration")
+        password_layout = QtWidgets.QFormLayout()
 
-        self.setLayout(background_layout)
+        self.password_field = QtWidgets.QLineEdit()
+        self.password_field.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.password_field.setText(self.settings.get('password', ''))
+        password_layout.addRow("New Password:", self.password_field)
 
-    def lock_screen(self):
-        self.user_credentials = self.load_user_credentials()
+        self.confirm_password_field = QtWidgets.QLineEdit()
+        self.confirm_password_field.setEchoMode(QtWidgets.QLineEdit.Password)
+        password_layout.addRow("Confirm Password:", self.confirm_password_field)
 
-        lock_dialog = LockDialog()
-        lock_dialog.exec_()
+        # Password strength indicator
+        self.password_strength_label = QtWidgets.QLabel("Password Strength: ")
+        self.password_strength_indicator = QtWidgets.QProgressBar()
+        self.password_strength_indicator.setRange(0, 100)
+        self.password_strength_indicator.setValue(0)
+        self.password_field.textChanged.connect(self.update_password_strength)
+        password_layout.addRow(self.password_strength_label, self.password_strength_indicator)
 
-    def load_user_credentials(self):
-        settings_dialog = SettingsDialog(self)  # Assuming you have a SettingsDialog class
-        return settings_dialog.load_user_credentials()
+        # Password generation
+        generate_password_button = QtWidgets.QPushButton("Generate Strong Password")
+        generate_password_button.clicked.connect(self.generate_strong_password)
+        password_layout.addRow(generate_password_button)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0, QColor("#0088cc"))
-        gradient.setColorAt(1, QColor("#004466"))
-        painter.fillRect(self.rect(), gradient)
+        # Security options
+        self.hash_passwords_checkbox = QtWidgets.QCheckBox("Use secure password hashing")
+        self.hash_passwords_checkbox.setChecked(self.settings.get('hash_passwords', True))
+        self.hash_passwords_checkbox.setToolTip("Store passwords securely using SHA-256 hash.")
+        password_layout.addRow(self.hash_passwords_checkbox)
 
-    def center_window(self):
-        frame = self.frameGeometry()
-        center = QDesktopWidget().availableGeometry().center()
-        frame.moveCenter(center)
-        self.move(frame.topLeft())
+        # Two factor authentication option
+        self.two_factor_checkbox = QtWidgets.QCheckBox("Enable two-factor authentication")
+        self.two_factor_checkbox.setChecked(self.settings.get('two_factor', False))
+        self.two_factor_checkbox.setToolTip("Require additional verification method.")
+        password_layout.addRow(self.two_factor_checkbox)
 
-    def open_settings(self):
-        settings_dialog = SettingsDialog(self)
-        settings_dialog.background_image_selected.connect(self.set_background_image)
-        settings_dialog.exec_()
+        # Failed attempt settings
+        max_attempts_layout = QtWidgets.QHBoxLayout()
+        max_attempts_label = QtWidgets.QLabel("Max failed login attempts:")
+        self.max_attempts_spinbox = QtWidgets.QSpinBox()
+        self.max_attempts_spinbox.setValue(self.settings.get('max_attempts', 3))
+        self.max_attempts_spinbox.setRange(1, 10)
+        max_attempts_layout.addWidget(max_attempts_label)
+        max_attempts_layout.addWidget(self.max_attempts_spinbox)
+        password_layout.addRow(max_attempts_layout)
 
-    def set_background_image(self, pixmap):
-        # Set the background image in the BackgroundWidget
-        background_widget = self.findChild(BackgroundWidget)
-        background_widget.background_image = pixmap
-        background_widget.update()
+        # Lockout duration
+        lockout_layout = QtWidgets.QHBoxLayout()
+        lockout_label = QtWidgets.QLabel("Lockout duration (minutes):")
+        self.lockout_spinbox = QtWidgets.QSpinBox()
+        self.lockout_spinbox.setValue(self.settings.get('lockout_duration', 5))
+        self.lockout_spinbox.setRange(1, 60)
+        lockout_layout.addWidget(lockout_label)
+        lockout_layout.addWidget(self.lockout_spinbox)
+        password_layout.addRow(lockout_layout)
 
-    def keyPressEvent(self, event):
-        key = event.key()
-        if key == Qt.Key_Escape or key == Qt.Key_Q:
-            self.close()
+        # Recovery email option
+        recovery_layout = QtWidgets.QHBoxLayout()
+        recovery_label = QtWidgets.QLabel("Recovery Email:")
+        self.recovery_email = QtWidgets.QLineEdit()
+        self.recovery_email.setText(self.settings.get('recovery_email', ''))
+        self.recovery_email.setPlaceholderText("Enter recovery email address")
+        recovery_layout.addWidget(recovery_label)
+        recovery_layout.addWidget(self.recovery_email)
+        password_layout.addRow(recovery_layout)
 
+        password_group.setLayout(password_layout)
+        security_layout.addWidget(password_group)
 
+        security_tab.setLayout(security_layout)
 
+        # --- Appearance Tab ---
+        appearance_tab = QtWidgets.QWidget()
+        appearance_layout = QtWidgets.QVBoxLayout()
 
+        # Custom wallpaper
+        wallpaper_group = QtWidgets.QGroupBox("Wallpaper")
+        wallpaper_layout = QtWidgets.QVBoxLayout()
 
+        self.wallpaper_label = QtWidgets.QLabel()
+        self.wallpaper_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.wallpaper_label.setFixedSize(200, 150)
+        self.wallpaper_label.setStyleSheet("border: 2px dashed #ccc;")
+        self.update_wallpaper_preview(self.settings.get('wallpaper', ''))
+        wallpaper_layout.addWidget(self.wallpaper_label)
 
+        wallpaper_buttons_layout = QtWidgets.QHBoxLayout()
+        browse_button = QtWidgets.QPushButton("Browse...")
+        browse_button.clicked.connect(self.choose_wallpaper)
+        wallpaper_buttons_layout.addWidget(browse_button)
 
-#--------------------------------------------------------------------------------------------------------
-#----------------------------------------------------------------------------------------------------------------
-#------------------------------------------------------------------------------------------------------------------
+        # New wallpaper options
+        random_wallpaper_button = QtWidgets.QPushButton("Use Random Wallpaper")
+        random_wallpaper_button.clicked.connect(self.use_random_wallpaper)
+        wallpaper_buttons_layout.addWidget(random_wallpaper_button)
 
-class SettingsDialog(QDialog):
-    background_image_selected = pyqtSignal(QPixmap, bool, str)
+        clear_wallpaper_button = QtWidgets.QPushButton("Clear Wallpaper")
+        clear_wallpaper_button.clicked.connect(self.clear_wallpaper)
+        wallpaper_buttons_layout.addWidget(clear_wallpaper_button)
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle('Settings')
-        self.setFixedSize(670, 670)
+        wallpaper_layout.addLayout(wallpaper_buttons_layout)
 
-        
-        # Initialize the logger
-        self.settings_logger = logging.getLogger('settings_logger')
-        self.settings_logger.setLevel(logging.ERROR)
+        # Wallpaper slide show option
+        self.slideshow_checkbox = QtWidgets.QCheckBox("Enable wallpaper slideshow")
+        self.slideshow_checkbox.setChecked(self.settings.get('slideshow_enabled', False))
+        wallpaper_layout.addWidget(self.slideshow_checkbox)
 
-        # Create a file handler and set its level to ERROR
-        file_handler = logging.FileHandler('settings.log')
-        file_handler.setLevel(logging.ERROR)
+        slideshow_interval_layout = QtWidgets.QHBoxLayout()
+        slideshow_interval_label = QtWidgets.QLabel("Change interval (minutes):")
+        self.slideshow_interval_spinbox = QtWidgets.QSpinBox()
+        self.slideshow_interval_spinbox.setValue(self.settings.get('slideshow_interval', 5))
+        self.slideshow_interval_spinbox.setRange(1, 60)
+        slideshow_interval_layout.addWidget(slideshow_interval_label)
+        slideshow_interval_layout.addWidget(self.slideshow_interval_spinbox)
+        wallpaper_layout.addLayout(slideshow_interval_layout)
 
-        # Create a formatter and add it to the file handler
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
+        self.slideshow_folder = QtWidgets.QLineEdit()
+        self.slideshow_folder.setText(self.settings.get('slideshow_folder', ''))
+        self.slideshow_folder.setReadOnly(True)
+        slideshow_folder_layout = QtWidgets.QHBoxLayout()
+        slideshow_folder_layout.addWidget(QtWidgets.QLabel("Slideshow Folder:"))
+        slideshow_folder_layout.addWidget(self.slideshow_folder)
+        browse_folder_button = QtWidgets.QPushButton("Browse...")
+        browse_folder_button.clicked.connect(self.choose_slideshow_folder)
+        slideshow_folder_layout.addWidget(browse_folder_button)
+        wallpaper_layout.addLayout(slideshow_folder_layout)
 
-        # Add the file handler to the logger
-        self.settings_logger.addHandler(file_handler)
-        self.background_folder_lineEdit = None
-        self.background_image_lineEdit = None
-        self.preview_label = None
-        self.user_credentials = self.load_user_credentials()
-        self.settings = QSettings("MyApp", "ScreenLocker")
-        self.auto_timer_checkbox = None
+        wallpaper_group.setLayout(wallpaper_layout)
+        appearance_layout.addWidget(wallpaper_group)
 
-        self.init_ui()
-        self.setup_auto_timer()
-        self.load_settings()
+        # Display options group
+        display_group = QtWidgets.QGroupBox("Display Options")
+        display_layout = QtWidgets.QVBoxLayout()
 
-    def init_ui(self):
-        layout = QVBoxLayout()
+        # Clock display toggle
+        self.clock_checkbox = QtWidgets.QCheckBox("Show clock on lock screen")
+        self.clock_checkbox.setChecked(self.settings.get('show_clock', True))
+        self.clock_checkbox.setToolTip("Display a clock on the lock screen.")
+        display_layout.addWidget(self.clock_checkbox)
 
-        
-        theme_label = QLabel('Select Theme:')
-        theme_dropdown = QComboBox()
-        theme_dropdown.addItems(['Default', 'Dark', 'Light'])
-        theme_dropdown.currentTextChanged.connect(self.apply_theme)
-        layout.addWidget(theme_label)
-        layout.addWidget(theme_dropdown)
+        # Clock format option
+        clock_format_layout = QtWidgets.QHBoxLayout()
+        clock_format_label = QtWidgets.QLabel("Clock Format:")
+        self.clock_format_combo = QtWidgets.QComboBox()
+        self.clock_format_combo.addItems(["12-hour", "24-hour"])
+        self.clock_format_combo.setCurrentText(self.settings.get('clock_format', '24-hour'))
+        clock_format_layout.addWidget(clock_format_label)
+        clock_format_layout.addWidget(self.clock_format_combo)
+        display_layout.addLayout(clock_format_layout)
+
+        # Show date option
+        self.show_date_checkbox = QtWidgets.QCheckBox("Show date on lock screen")
+        self.show_date_checkbox.setChecked(self.settings.get('show_date', True))
+        display_layout.addWidget(self.show_date_checkbox)
+
+        # Date format option
+        date_format_layout = QtWidgets.QHBoxLayout()
+        date_format_label = QtWidgets.QLabel("Date Format:")
+        self.date_format_combo = QtWidgets.QComboBox()
+        self.date_format_combo.addItems(["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"])
+        self.date_format_combo.setCurrentText(self.settings.get('date_format', 'MM/DD/YYYY'))
+        date_format_layout.addWidget(date_format_label)
+        date_format_layout.addWidget(self.date_format_combo)
+        display_layout.addLayout(date_format_layout)
+
+        # Background blur option
+        self.blur_checkbox = QtWidgets.QCheckBox("Apply background blur effect")
+        self.blur_checkbox.setChecked(self.settings.get('background_blur', False))
+        display_layout.addWidget(self.blur_checkbox)
+
+        # Blur intensity
+        blur_intensity_layout = QtWidgets.QHBoxLayout()
+        blur_intensity_label = QtWidgets.QLabel("Blur Intensity:")
+        self.blur_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.blur_slider.setRange(1, 20)
+        self.blur_slider.setValue(self.settings.get('blur_intensity', 5))
+        blur_intensity_layout.addWidget(blur_intensity_label)
+        blur_intensity_layout.addWidget(self.blur_slider)
+        display_layout.addLayout(blur_intensity_layout)
+
+        # Background color picker
+        color_layout = QtWidgets.QHBoxLayout()
+        color_label = QtWidgets.QLabel("Background color:")
+        self.color_button = QtWidgets.QPushButton()
+        self.color_button.setFixedSize(30, 30)
+        self.current_color = self.settings.get('background_color', '#000000')
+        self.color_button.setStyleSheet(f"background-color: {self.current_color};")
+        self.color_button.clicked.connect(self.choose_color)
+        self.color_button.setToolTip("Choose a background color for the lock screen.")
+        color_layout.addWidget(color_label)
+        color_layout.addWidget(self.color_button)
+        color_layout.addStretch()
+        display_layout.addLayout(color_layout)
+
+        # Opacity slider
+        opacity_layout = QtWidgets.QHBoxLayout()
+        opacity_label = QtWidgets.QLabel("Background Opacity:")
+        self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(self.settings.get('background_opacity', 80))
+        self.opacity_slider.setToolTip("Set the background opacity (0 = transparent, 100 = opaque)")
+        opacity_layout.addWidget(opacity_label)
+        opacity_layout.addWidget(self.opacity_slider)
+        display_layout.addLayout(opacity_layout)
+
+        display_group.setLayout(display_layout)
+        appearance_layout.addWidget(display_group)
+
+        appearance_tab.setLayout(appearance_layout)
+
+        # Add tabs to the tab widget
+        self.tab_widget.addTab(general_tab, "General")
+        self.tab_widget.addTab(security_tab, "Security")
+        self.tab_widget.addTab(appearance_tab, "Appearance")
+
+        layout.addWidget(self.tab_widget)
+
+        # Add save and cancel buttons
+        buttons_layout = QtWidgets.QHBoxLayout()
+        self.save_button = QtWidgets.QPushButton("Save")
+        self.save_button.clicked.connect(self.save_settings)
+        self.cancel_button = QtWidgets.QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.close)
+        buttons_layout.addWidget(self.save_button)
+        buttons_layout.addWidget(self.cancel_button)
+        layout.addLayout(buttons_layout)
 
         self.setLayout(layout)
-
-        create_credentials_button = QPushButton('Create User Credentials')
-        create_credentials_button.clicked.connect(self.create_credentials)
-        create_credentials_button.setFixedSize(200, 30)
-        create_credentials_button.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                padding: 5px;
-            }
-            QPushButton:hover {
-                background-color: #e5e5e5;
-            }
-            QPushButton:pressed {
-                background-color: #d5d5d5;
-            }
-        """)
-        layout.addWidget(create_credentials_button)
-
-        change_password_button = QPushButton('Change Password')
-        change_password_button.clicked.connect(self.change_password)
-        change_password_button.setFixedSize(200, 30)
-        change_password_button.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                padding: 5px;
-            }
-            QPushButton:hover {
-                background-color: #e5e5e5;
-            }
-            QPushButton:pressed {
-                background-color: #d5d5d5;
-            }
-        """)
-        layout.addWidget(change_password_button)
-
-        background_button = QPushButton('Choose Background')
-        background_button.setFixedSize(200, 30)
-        background_button.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                padding: 5px;
-            }
-            QPushButton:hover {
-                background-color: #e5e5e5;
-            }
-            QPushButton:pressed {
-                background-color: #d5d5d5;
-            }
-        """)
-        background_button.clicked.connect(self.choose_background)
-        layout.addWidget(background_button)
-
-        self.preview_label = QLabel()
-        self.preview_label.setFixedSize(400, 400)
-        layout.addWidget(self.preview_label)
-
-        self.auto_timer_checkbox = QCheckBox('Auto Timer')
-        self.auto_timer_checkbox.setChecked(True)
-        self.auto_timer_checkbox.stateChanged.connect(self.update_auto_timer)
-        layout.addWidget(self.auto_timer_checkbox)
-
-        slider_layout = QHBoxLayout()
-        self.slide_time_label = QLabel('Slide Time: 0 hours')
-        slider_layout.addWidget(self.slide_time_label)
-
-        self.slide_time_slider = QSlider(Qt.Horizontal)
-        self.slide_time_slider.setRange(5, 60)
-        self.slide_time_slider.setTickPosition(QSlider.TicksBelow)
-        self.slide_time_slider.setTickInterval(5)
-        self.slide_time_slider.valueChanged.connect(self.update_slide_time_label)
-        slider_layout.addWidget(self.slide_time_slider)
-
-        layout.addLayout(slider_layout)
-        self.setLayout(layout)
-        
-        save_button = QPushButton('Save')
-        save_button.setFixedSize(200, 30)
-        save_button.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                padding: 5px;
-            }
-            QPushButton:hover {
-                background-color: #e5e5e5;
-            }
-            QPushButton:pressed {
-                background-color: #d5d5d5;
-            }
-        """)
-        save_button.clicked.connect(self.save_settings)
-        layout.addWidget(save_button)
-
-        self.setLayout(layout)
-        
-        
-        
-        
-    def apply_theme(self, theme_name):
-        app= QApplication.instance()
-        if theme_name == 'Default':
-            # Apply default stylesheet
-            app.setStyleSheet('')
-        elif theme_name == 'Dark':
-            # Apply dark theme stylesheet
-            app.setStyleSheet('''
-                /* Dark theme stylesheet rules */
-                QDialog {
-                    background-color: #333333;
-                    color: #ffffff;
-                }
-
-                QLabel {
-                    color: #ffffff;
-                }
-
-                QPushButton {
-                    background-color: #555555;
-                    color: #ffffff;
-                    border: 1px solid #ffffff;
-                    border-radius: 5px;
-                    padding: 5px;
-                }
-
-                QPushButton:hover {
-                    background-color: #666666;
-                }
-
-                QPushButton:pressed {
-                    background-color: #444444;
-                }
-
-                QCheckBox {
-                    color: #ffffff;
-                }
-
-                QSlider::groove:horizontal {
-                    background-color: #666666;
-                    height: 10px;
-                }
-
-                QSlider::handle:horizontal {
-                    background-color: #ffffff;
-                    width: 10px;
-                    margin: -5px;
-                }
-            ''')
-        elif theme_name == 'Light':
-            # Apply light theme stylesheet
-            app.setStyleSheet('''
-                /* Light theme stylesheet rules */
-                QDialog {
-                    background-color: #f5f5f5;
-                    color: #000000;
-                }
-
-                QLabel {
-                    color: #000000;
-                }
-
-                QPushButton {
-                    background-color: #e5e5e5;
-                    color: #000000;
-                    border: 1px solid #000000;
-                    border-radius: 5px;
-                    padding: 5px;
-                }
-
-                QPushButton:hover {
-                    background-color: #d5d5d5;
-                }
-
-                QPushButton:pressed {
-                    background-color: #f0f0f0;
-                }
-
-                QCheckBox {
-                    color: #000000;
-                }
-
-                QSlider::groove:horizontal {
-                    background-color: #d5d5d5;
-                    height: 10px;
-                }
-
-                QSlider::handle:horizontal {
-                    background-color: #000000;
-                    width: 10px;
-                    margin: -5px;
-                }
-            ''')
-
-    def update_auto_timer(self, state):
-        if state == Qt.Checked:
-            self.setup_auto_timer()
-        else:
-            self.disable_auto_timer()
-
-    def update_slide_time_label(self, value):
-        hours = value // 60
-        minutes = value % 60
-        self.slide_time_label.setText(f'Slide Time: {hours} hours {minutes} minutes')
-
-    def choose_background(self):
-        options = QFileDialog.Options()
-        options |= QFileDialog.DontUseNativeDialog
-        file_dialog = QFileDialog(self, 'Choose Background', options=options)
-        file_dialog.setFileMode(QFileDialog.ExistingFiles)
-        file_dialog.setNameFilters(["Image files (*.png *.jpg *.jpeg)", "Folder"])
-        if file_dialog.exec_():
-            selected_files = file_dialog.selectedFiles()
-            if len(selected_files) > 0:
-                selected_file = selected_files[0]
-                if len(selected_files) == 1 and not selected_file.endswith(('png', 'jpg', 'jpeg')):
-                    self.background_folder_lineEdit = selected_file
-                    self.background_image_lineEdit = None
-                else:
-                    self.background_image_lineEdit = selected_file
-                    self.background_folder_lineEdit = None
-                self.update_preview()
-
-    def update_preview(self):
-        if self.background_image_lineEdit:
-            pixmap = QPixmap(self.background_image_lineEdit)
-        elif self.background_folder_lineEdit:
-            image_files = [
-                file for file in os.listdir(self.background_folder_lineEdit)
-                if file.endswith(('.png', '.jpg', '.jpeg'))
-            ]
-            if image_files:
-                first_image_path = os.path.join(self.background_folder_lineEdit, image_files[0])
-                pixmap = QPixmap(first_image_path)
-            else:
-                pixmap = QPixmap()  # Empty pixmap if no images found
-        else:
-            pixmap = QPixmap()  # Empty pixmap if no selection
-
-        if pixmap.isNull() or pixmap.width() == 0 or pixmap.height() == 0:
-            self.preview_label.clear()  # Clear the label if pixmap is null or empty
-        else:
-            self.preview_label.setPixmap(pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio))
-
-    def setup_auto_timer(self):
-        if hasattr(self, 'auto_timer'):
-            self.auto_timer.stop()
-
-        slide_time_minutes = self.slide_time_slider.value()
-        slide_time_milliseconds = slide_time_minutes * 60 * 1000  # Convert minutes to milliseconds
-        self.auto_timer = QTimer(self)
-        self.auto_timer.timeout.connect(self.launch_lock_dialog)
-        self.auto_timer.start(slide_time_milliseconds)
-
-    def disable_auto_timer(self):
-        if hasattr(self, 'auto_timer'):
-            self.auto_timer.stop()
-
-    def launch_lock_dialog(self):
-        lock_dialog = LockDialog(self)
-        lock_dialog.exec_()
+        self.apply_theme()
 
     def load_settings(self):
+        """Load settings from JSON file."""
         try:
-            self.settings = QSettings("MyApp", "ScreenLocker")
-            background_image = self.settings.value('background_image')
-            if background_image:
-                self.background_image_lineEdit = background_image
-
-            background_folder = self.settings.value('background_folder')
-            if background_folder:
-                self.background_folder_lineEdit = background_folder
-
-            auto_timer = self.settings.value('auto_timer')
-            if auto_timer:
-                self.auto_timer_checkbox.setChecked(bool(auto_timer))
-
-            slide_time = self.settings.value('slide_time')
-            if slide_time:
-                self.slide_time_slider.setValue(int(slide_time))
-
-            self.update_preview()
+            if os.path.exists("settings.json"):
+                with open("settings.json", "r") as f:
+                    return json.load(f)
+            return {}
         except Exception as e:
             print(f"Error loading settings: {e}")
+            return {}
 
     def save_settings(self):
+        """Save settings to JSON file."""
         try:
-            self.settings.setValue('background_image', self.background_image_lineEdit)
-            self.settings.setValue('background_folder', self.background_folder_lineEdit)
-            self.settings.setValue('auto_timer', self.auto_timer_checkbox.isChecked())
-            self.settings.setValue('slide_time', self.slide_time_slider.value())
-            self.accept()
-        except Exception as e:
-            self.settings_logger.error(f"Error saving settings: {str(e)}")
+            # Validate password
+            if self.password_field.text():
+                if self.password_field.text() != self.confirm_password_field.text():
+                    QMessageBox.warning(self, "Password Mismatch", "Passwords do not match.")
+                    return
 
-    def create_credentials(self):
+                # Hash password if option is selected
+                if self.hash_passwords_checkbox.isChecked():
+                    password_hash = hashlib.sha256(self.password_field.text().encode()).hexdigest()
+                    self.settings['password'] = password_hash
+                else:
+                    self.settings['password'] = self.password_field.text()
+
+            # Save other settings
+            self.settings['theme'] = self.theme_combo.currentText()
+            self.settings['timeout'] = self.timeout_spinbox.value()
+            self.settings['hot_corners'] = self.hot_corners_checkbox.isChecked()
+            self.settings['lock_on_startup'] = self.lock_on_startup_checkbox.isChecked()
+            self.settings['lock_on_sleep'] = self.lock_on_sleep_checkbox.isChecked()
+            self.settings['hash_passwords'] = self.hash_passwords_checkbox.isChecked()
+            self.settings['two_factor'] = self.two_factor_checkbox.isChecked()
+            self.settings['max_attempts'] = self.max_attempts_spinbox.value()
+            self.settings['lockout_duration'] = self.lockout_spinbox.value()
+            self.settings['recovery_email'] = self.recovery_email.text()
+            self.settings['show_clock'] = self.clock_checkbox.isChecked()
+            self.settings['clock_format'] = self.clock_format_combo.currentText()
+            self.settings['show_date'] = self.show_date_checkbox.isChecked()
+            self.settings['date_format'] = self.date_format_combo.currentText()
+            self.settings['background_blur'] = self.blur_checkbox.isChecked()
+            self.settings['blur_intensity'] = self.blur_slider.value()
+            self.settings['background_color'] = self.current_color
+            self.settings['background_opacity'] = self.opacity_slider.value()
+            self.settings['slideshow_enabled'] = self.slideshow_checkbox.isChecked()
+            self.settings['slideshow_interval'] = self.slideshow_interval_spinbox.value()
+            self.settings['slideshow_folder'] = self.slideshow_folder.text()
+
+            # Save to file
+            with open("settings.json", "w") as f:
+                json.dump(self.settings, f, indent=4)
+
+            QMessageBox.information(self, "Settings Saved", "Settings have been saved successfully.")
+            self.close()
+
+            # Activate screen lock after saving settings
+            self.lock_screen()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error saving settings: {e}")
+
+    def lock_screen(self):
+        """Activate the screen lock."""
         try:
-            if len(self.user_credentials) >= 2:
-                QMessageBox.warning(self, 'Credentials Limit', 'You have reached the maximum number of credentials.')
-                return
+            # Close existing lock screen instance if it exists
+            if self.screen_lock is not None:
+                self.screen_lock.close()
 
-            username, ok = QInputDialog.getText(self, 'Create User Credentials', 'Enter username:')
-            if ok:
-                for user in self.user_credentials:
-                    if user[0] == username:
-                        QMessageBox.warning(self, 'Username Exists', 'The entered username already exists.')
-                        return
+            # Create a new LockScreen instance
+            self.screen_lock = LockScreen(self.settings)
 
-                password, ok = QInputDialog.getText(self, 'Create User Credentials', 'Enter password:', QLineEdit.Password)
-                if ok:
-                    self.user_credentials.append((username, password))
-                    self.save_user_credentials()
+            # Connect the unlocked signal to a slot
+            self.screen_lock.unlocked.connect(self.on_unlock)
+
+            # Show the lock screen
+            self.screen_lock.show()
+
         except Exception as e:
-            print(f"Error creating credentials: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to activate screen lock: {e}")
 
-    def change_password(self):
-        try:
-            users = [user[0] for user in self.user_credentials]
-            if users:
-                selected_user, ok = QInputDialog.getItem(self, 'Change Password', 'Select user:', users, editable=False)
-                if ok:
-                    new_password, ok = QInputDialog.getText(self, 'Change Password', 'Enter new password:', QLineEdit.Password)
-                    if ok:
-                        for i, user in enumerate(self.user_credentials):
-                            if user[0] == selected_user:
-                                self.user_credentials[i] = (selected_user, new_password)
-                                self.save_user_credentials()
-        except Exception as e:
-            print(f"Error changing password: {e}")
+    def on_unlock(self):
+        """Handle the unlocked signal from the lock screen."""
+        QMessageBox.information(self, "Unlocked", "Screen unlocked successfully.")
+        self.show()  # Restore the main window
 
-    def save_user_credentials(self):
-        try:
-            filename = 'credentials.csv'
-            with open(filename, 'w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(['username', 'password'])
-                writer.writerows(self.user_credentials)
-        except Exception as e:
-            self.settings_logger.error(f"Error saving user credentials: {str(e)}")
+    def reset_inactivity_timer(self):
+        """Reset the inactivity timer."""
+        timeout_minutes = self.settings.get('timeout', 5)
+        self.inactivity_timer.start(timeout_minutes * 60 * 1000)  # Convert minutes to milliseconds
 
+    def eventFilter(self, obj, event):
+        """Detect user activity to reset the inactivity timer."""
+        if event.type() in (QtCore.QEvent.MouseMove, QtCore.QEvent.KeyPress):
+            self.reset_inactivity_timer()
+        return super().eventFilter(obj, event)
 
-    def load_user_credentials(self):
-        try:
-            filename = 'credentials.csv'
-            with open(filename, 'r', newline='') as file:
-                reader = csv.reader(file)
-                user_credentials = [row for row in reader if len(row) == 2]
-                return user_credentials
-        except Exception as e:
-            self.settings_logger.error(f"Error loading user credentials: {str(e)}")
-            return []
+    def update_password_strength(self):
+        """Update password strength indicator."""
+        password = self.password_field.text()
+        strength = 0
 
-    # Rest of the code...
+        if len(password) >= 8:
+            strength += 25
+        if any(c.isdigit() for c in password):
+            strength += 25
+        if any(c.isupper() for c in password):
+            strength += 25
+        if any(c.islower() for c in password) and any(not c.isalnum() for c in password):
+            strength += 25
+
+        self.password_strength_indicator.setValue(strength)
+
+        if strength <= 25:
+            self.password_strength_indicator.setStyleSheet("QProgressBar::chunk { background-color: red; }")
+            self.password_strength_label.setText("Password Strength: Weak")
+        elif strength <= 50:
+            self.password_strength_indicator.setStyleSheet("QProgressBar::chunk { background-color: orange; }")
+            self.password_strength_label.setText("Password Strength: Medium")
+        elif strength <= 75:
+            self.password_strength_indicator.setStyleSheet("QProgressBar::chunk { background-color: yellow; }")
+            self.password_strength_label.setText("Password Strength: Good")
+        else:
+            self.password_strength_indicator.setStyleSheet("QProgressBar::chunk { background-color: green; }")
+            self.password_strength_label.setText("Password Strength: Strong")
+
+    def generate_strong_password(self):
+        """Generate a strong password."""
+        length = 12
+        chars = string.ascii_letters + string.digits + string.punctuation
+        password = ''.join(random.choice(chars) for _ in range(length))
+        self.password_field.setText(password)
+        self.confirm_password_field.setText(password)
+        self.update_password_strength()
+
+    def choose_wallpaper(self):
+        """Open file dialog to choose wallpaper."""
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select Wallpaper", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)"
+        )
+        if file_path:
+            self.settings['wallpaper'] = file_path
+            self.update_wallpaper_preview(file_path)
+
+    def update_wallpaper_preview(self, path):
+        """Update the wallpaper preview."""
+        if path and os.path.exists(path):
+            pixmap = QtGui.QPixmap(path)
+            scaled_pixmap = pixmap.scaled(
+                self.wallpaper_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+            )
+            self.wallpaper_label.setPixmap(scaled_pixmap)
+            self.wallpaper_label.setStyleSheet("")
+        else:
+            self.wallpaper_label.setPixmap(QtGui.QPixmap())
+            self.wallpaper_label.setStyleSheet("border: 2px dashed #ccc;")
+
+    def use_random_wallpaper(self):
+        """Use a random wallpaper from the system."""
+        # For demonstration, we're just using a placeholder
+        self.settings['wallpaper'] = "random"
+        self.wallpaper_label.setPixmap(QtGui.QPixmap())
+        self.wallpaper_label.setStyleSheet("background-color: #3498db; border: none;")
+        QMessageBox.information(self, "Random Wallpaper", "Random wallpaper will be used on each lock.")
+
+    def clear_wallpaper(self):
+        """Clear the wallpaper selection."""
+        self.settings['wallpaper'] = ""
+        self.wallpaper_label.setPixmap(QtGui.QPixmap())
+        self.wallpaper_label.setStyleSheet("border: 2px dashed #ccc;")
+
+    def choose_slideshow_folder(self):
+        """Open dialog to choose slideshow folder."""
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Slideshow Folder")
+        if folder:
+            self.slideshow_folder.setText(folder)
+
+    def choose_color(self):
+        """Open color picker dialog."""
+        color = QtWidgets.QColorDialog.getColor(QtGui.QColor(self.current_color), self)
+        if color.isValid():
+            self.current_color = color.name()
+            self.color_button.setStyleSheet(f"background-color: {self.current_color};")
+
+    def apply_theme(self):
+        """Apply the selected theme to the UI."""
+        theme = self.theme_combo.currentText()
+        if theme == "Light":
+            self.setStyleSheet("""
+                QWidget { background-color: #f0f0f0; color: #333333; }
+                QTabWidget::pane { border: 1px solid #cccccc; }
+                QTabBar::tab { background-color: #e0e0e0; color: #333333; padding: 8px 20px; border: 1px solid #cccccc; }
+                QTabBar::tab:selected { background-color: #ffffff; }
+                QPushButton { background-color: #e0e0e0; color: #333333; border: 1px solid #cccccc; padding: 5px 10px; }
+                QPushButton:hover { background-color: #d0d0d0; }
+                QLineEdit, QSpinBox, QComboBox { background-color: #ffffff; border: 1px solid #cccccc; padding: 5px; }
+                QCheckBox, QLabel { color: #333333; }
+                QGroupBox { border: 1px solid #cccccc; margin-top: 10px; }
+                QGroupBox::title { color: #333333; }
+            """)
+        elif theme == "Dark":
+            self.setStyleSheet("""
+                QWidget { background-color: #2d2d2d; color: #f0f0f0; }
+                QTabWidget::pane { border: 1px solid #555555; }
+                QTabBar::tab { background-color: #3d3d3d; color: #f0f0f0; padding: 8px 20px; border: 1px solid #555555; }
+                QTabBar::tab:selected { background-color: #2d2d2d; }
+                QPushButton { background-color: #3d3d3d; color: #f0f0f0; border: 1px solid #555555; padding: 5px 10px; }
+                QPushButton:hover { background-color: #4d4d4d; }
+                QLineEdit, QSpinBox, QComboBox { background-color: #3d3d3d; border: 1px solid #555555; color: #f0f0f0; padding: 5px; }
+                QCheckBox, QLabel { color: #f0f0f0; }
+                QGroupBox { border: 1px solid #555555; margin-top: 10px; }
+                QGroupBox::title { color: #f0f0f0; }
+            """)
+        else:  # Custom theme
+            pass  # User can define their own theme in the future
+
+class LockScreen(QtWidgets.QWidget):
+    unlocked = QtCore.pyqtSignal()  # Signal to emit when successfully unlocked
+
+    def __init__(self, settings=None):
+        super().__init__()
+        self.setWindowTitle("Lock Screen")
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        self.showFullScreen()
+
+        self.settings = settings if settings else self.load_settings()
+        self.failed_attempts = 0
+        self.locked_out = False
+        self.lockout_timer = None
+
+        # Set up UI
+        self.init_ui()
+
+        # Start inactivity timer
+        self.inactivity_timer = QTimer(self)
+        self.inactivity_timer.timeout.connect(self.check_inactivity)
+        self.inactivity_timer.start(10000)  # Check every 10 seconds
+
+        # Set up slideshow timer if enabled
+        if self.settings.get('slideshow_enabled', False):
+            self.slideshow_timer = QTimer(self)
+            self.slideshow_timer.timeout.connect(self.change_wallpaper)
+            interval = self.settings.get('slideshow_interval', 5) * 60000  # Convert to milliseconds
+            self.slideshow_timer.start(interval)
+            self.wallpaper_files = []
+            self.load_slideshow_images()
+
+        # Track mouse movement for hot corners
+        if self.settings.get('hot_corners', False):
+            self.setMouseTracking(True)
+
+        # Set up the last activity time
+        self.last_activity_time = QtCore.QDateTime.currentDateTime()
+
+    def init_ui(self):
+        """Initialize the user interface."""
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Main container widget
+        self.main_widget = QWidget()
+        self.main_layout = QVBoxLayout(self.main_widget)
+        self.main_layout.setAlignment(QtCore.Qt.AlignCenter)
+
+        # Set background
+        self.set_background()
+
+        # Clock and date
+        if self.settings.get('show_clock', True):
+            self.clock_label = QLabel()
+            self.clock_label.setAlignment(QtCore.Qt.AlignCenter)
+            self.clock_label.setFont(QFont("Arial", 72, QFont.Bold))
+            self.clock_label.setStyleSheet("color: white; background-color: transparent;")
+            self.main_layout.addWidget(self.clock_label)
+
+            # Update clock every second
+            self.clock_timer = QTimer(self)
+            self.clock_timer.timeout.connect(self.update_clock)
+            self.clock_timer.start(1000)
+            self.update_clock()
+
+        if self.settings.get('show_date', True):
+            self.date_label = QLabel()
+            self.date_label.setAlignment(QtCore.Qt.AlignCenter)
+            self.date_label.setFont(QFont("Arial", 24))
+            self.date_label.setStyleSheet("color: white; background-color: transparent;")
+            self.main_layout.addWidget(self.date_label)
+            self.update_date()
+
+        # Spacer
+        self.main_layout.addSpacing(50)
+
+        # Login form
+        login_container = QWidget()
+        login_container.setStyleSheet("background-color: rgba(0, 0, 0, 0.5); border-radius: 10px;")
+        login_layout = QVBoxLayout(login_container)
+        login_layout.setContentsMargins(30, 30, 30, 30)
+
+        # Login prompt
+        login_prompt = QLabel("Enter your password to unlock")
+        login_prompt.setAlignment(QtCore.Qt.AlignCenter)
+        login_prompt.setFont(QFont("Arial", 14))
+        login_prompt.setStyleSheet("color: white; background-color: transparent;")
+        login_layout.addWidget(login_prompt)
+
+        # Password field
+        self.password_field = QLineEdit()
+        self.password_field.setEchoMode(QLineEdit.Password)
+        self.password_field.setStyleSheet("""
+            QLineEdit {
+                padding: 10px;
+                border: 2px solid #555;
+                border-radius: 5px;
+                background-color: rgba(255, 255, 255, 0.2);
+                color: white;
+                font-size: 16px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #3498db;
+            }
+        """)
+        self.password_field.returnPressed.connect(self.attempt_unlock)
+        login_layout.addWidget(self.password_field)
+
+        # Unlock button
+        self.unlock_button = QPushButton("Unlock")
+        self.unlock_button.setStyleSheet("""
+            QPushButton {
+                padding: 10px;
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:pressed {
+                background-color: #1c6ea4;
+            }
+        """)
+        self.unlock_button.clicked.connect(self.attempt_unlock)
+        login_layout.addWidget(self.unlock_button)
+
+        # Error message
+        self.error_label = QLabel()
+        self.error_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.error_label.setStyleSheet("color: #e74c3c; background-color: transparent;")
+        self.error_label.hide()
+        login_layout.addWidget(self.error_label)
+
+        # Add login container to main layout
+        self.main_layout.addWidget(login_container)
+        self.main_layout.addStretch()
+
+        # Add main widget to the layout
+        layout.addWidget(self.main_widget)
+        self.setLayout(layout)
+
+    def keyPressEvent(self, event):
+        """Handle key press events."""
+        if event.key() == QtCore.Qt.Key_Escape:
+            # Debug function: Force unlock on Esc key press
+            print("Debug: Force unlocking the screen.")
+            self.unlocked.emit()  # Emit the unlocked signal
+            self.hide()  # Hide the lock screen
+        else:
+            super().keyPressEvent(event)
+
+    def set_background(self):
+        """Set the background of the lock screen."""
+        wallpaper = self.settings.get('wallpaper', '')
+        blur = self.settings.get('background_blur', False)
+        opacity = self.settings.get('background_opacity', 80) / 100.0
+
+        # Set background style
+        if wallpaper and os.path.exists(wallpaper):
+            # Set wallpaper as background
+            pixmap = QtGui.QPixmap(wallpaper)
+
+            if blur:
+                # Apply blur effect
+                blur_intensity = self.settings.get('blur_intensity', 5)
+                image = pixmap.toImage()
+                blur_effect = QtGui.QGraphicsBlurEffect()
+                blur_effect.setBlurRadius(blur_intensity)
+
+                # Apply blur effect to the image
+                scene = QtWidgets.QGraphicsScene()
+                pixmap_item = QtWidgets.QGraphicsPixmapItem(QtGui.QPixmap.fromImage(image))
+                pixmap_item.setGraphicsEffect(blur_effect)
+                scene.addItem(pixmap_item)
+
+                # Render the blurred image
+                blurred_image = QtGui.QImage(image.size(), QtGui.QImage.Format_ARGB32)
+                blurred_image.fill(QtCore.Qt.transparent)
+                painter = QtGui.QPainter(blurred_image)
+                scene.render(painter)
+                painter.end()
+
+                pixmap = QtGui.QPixmap.fromImage(blurred_image)
+
+            # Set the wallpaper as the background
+            palette = self.palette()
+            palette.setBrush(QtGui.QPalette.Background, QtGui.QBrush(pixmap))
+            self.setPalette(palette)
+            self.setAutoFillBackground(True)
+        else:
+            # Use solid color background
+            bg_color = self.settings.get('background_color', '#000000')
+            self.setStyleSheet(f"background-color: {bg_color};")
+
+    def update_clock(self):
+        """Update the clock display."""
+        current_time = QtCore.QTime.currentTime()
+
+        if self.settings.get('clock_format', '24-hour') == '12-hour':
+            time_format = "hh:mm:ss AP"
+        else:
+            time_format = "HH:mm:ss"
+
+        time_text = current_time.toString(time_format)
+        self.clock_label.setText(time_text)
+
+    def update_date(self):
+        """Update the date display."""
+        current_date = QtCore.QDate.currentDate()
+        date_format = self.settings.get('date_format', 'MM/DD/YYYY')
+
+        format_map = {
+            'MM/DD/YYYY': 'MM/dd/yyyy',
+            'DD/MM/YYYY': 'dd/MM/yyyy',
+            'YYYY-MM-DD': 'yyyy-MM-dd'
+        }
+
+        qt_format = format_map.get(date_format, 'MM/dd/yyyy')
+        date_text = current_date.toString(qt_format)
+        self.date_label.setText(date_text)
+
+    def attempt_unlock(self):
+        """Attempt to unlock the screen with the provided password."""
+        if self.locked_out:
+            self.error_label.setText("Account locked. Please wait.")
+            self.error_label.show()
+            return
+
+        password = self.password_field.text()
+        stored_password = self.settings.get('password', '')
+
+        if self.settings.get('hash_passwords', True):
+            # Compare hashed passwords
+            hashed_input = hashlib.sha256(password.encode()).hexdigest()
+            if hashed_input == stored_password:
+                self.unlock()
+            else:
+                self.handle_failed_attempt()
+        else:
+            # Compare plain text passwords
+            if password == stored_password:
+                self.unlock()
+            else:
+                self.handle_failed_attempt()
+
+    def handle_failed_attempt(self):
+        """Handle failed login attempt."""
+        self.failed_attempts += 1
+        max_attempts = self.settings.get('max_attempts', 3)
+
+        if self.failed_attempts >= max_attempts:
+            # Lock out the account
+            self.locked_out = True
+            lockout_duration = self.settings.get('lockout_duration', 5) * 60000  # Convert to milliseconds
+
+            self.error_label.setText(f"Too many failed attempts. Locked for {self.settings.get('lockout_duration', 5)} minutes.")
+            self.error_label.show()
+
+            self.password_field.setEnabled(False)
+            self.unlock_button.setEnabled(False)
+
+            # Start lockout timer
+            self.lockout_timer = QTimer(self)
+            self.lockout_timer.timeout.connect(self.end_lockout)
+            self.lockout_timer.setSingleShot(True)
+            self.lockout_timer.start(lockout_duration)
+        else:
+            # Show error message
+            remaining = max_attempts - self.failed_attempts
+            self.error_label.setText(f"Incorrect password. {remaining} attempts remaining.")
+            self.error_label.show()
+
+        # Clear password field
+        self.password_field.clear()
+
+    def end_lockout(self):
+        """End the lockout period."""
+        self.locked_out = False
+        self.failed_attempts = 0
+        self.password_field.setEnabled(True)
+        self.unlock_button.setEnabled(True)
+        self.error_label.hide()
+
+    def unlock(self):
+        """Unlock the screen."""
+        self.unlocked.emit()
+        self.hide()
 
     def load_settings(self):
+        """Load settings from JSON file."""
         try:
-            self.settings = QSettings("MyApp", "ScreenLocker")
-            background_image = self.settings.value('background_image')
-            if background_image:
-                self.background_image_lineEdit = background_image
-
-            background_folder = self.settings.value('background_folder')
-            if background_folder:
-                self.background_folder_lineEdit = background_folder
-
-            auto_timer = self.settings.value('auto_timer')
-            if auto_timer:
-                self.auto_timer_checkbox.setChecked(bool(auto_timer))
-
-            slide_time = self.settings.value('slide_time')
-            if slide_time:
-                self.slide_time_slider.setValue(int(slide_time))
-
-            self.update_preview()
+            if os.path.exists("settings.json"):
+                with open("settings.json", "r") as f:
+                    return json.load(f)
+            return {}
         except Exception as e:
-            self.settings_logger.exception(f"Error loading settings: {str(e)}")
+            print(f"Error loading settings: {e}")
+            return {}
 
+    def check_inactivity(self):
+        """Check for user inactivity."""
+        current_time = QtCore.QDateTime.currentDateTime()
+        timeout = self.settings.get('timeout', 5) * 60  # Convert to seconds
 
-    def save_settings(self):
-        try:
-            self.settings.setValue('background_image', self.background_image_lineEdit)
-            self.settings.setValue('background_folder', self.background_folder_lineEdit)
-            self.settings.setValue('auto_timer', self.auto_timer_checkbox.isChecked())
-            self.settings.setValue('slide_time', self.slide_time_slider.value())
+        # Check if the timeout has elapsed
+        if self.last_activity_time.secsTo(current_time) > timeout:
+            # Reset the timer
+            self.last_activity_time = current_time
+            # Just for demonstration, in a real app you'd lock the screen here
+            print("Screen would lock due to inactivity")
 
-            self.accept()
-        except Exception as e:
-            self.settings_logger.exception(f"Error saving settings: {str(e)}")
+    def load_slideshow_images(self):
+        """Load slideshow images from the specified folder."""
+        folder = self.settings.get('slideshow_folder', '')
+        if folder and os.path.isdir(folder):
+            image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.gif']
+            self.wallpaper_files = [
+                os.path.join(folder, f) for f in os.listdir(folder)
+                if os.path.splitext(f)[1].lower() in image_extensions
+            ]
 
-    def create_credentials(self):
-        try:
-            if len(self.user_credentials) >= 2:
-                QMessageBox.warning(self, 'Credentials Limit', 'You have reached the maximum number of credentials.')
-                return
+    def change_wallpaper(self):
+        """Change the wallpaper for slideshow."""
+        if self.wallpaper_files:
+            random_wallpaper = random.choice(self.wallpaper_files)
+            self.settings['wallpaper'] = random_wallpaper
+            self.set_background()
 
-            username, ok = QInputDialog.getText(self, 'Create User Credentials', 'Enter username:')
-            if ok:
-                for user in self.user_credentials:
-                    if user[0] == username:
-                        QMessageBox.warning(self, 'Username Exists', 'The entered username already exists.')
-                        return
+    def mouseMoveEvent(self, event):
+        """Handle mouse movement events."""
+        # Update the last activity time
+        self.last_activity_time = QtCore.QDateTime.currentDateTime()
 
-                password, ok = QInputDialog.getText(self, 'Create User Credentials', 'Enter password:', QLineEdit.Password)
-                if ok:
-                    self.user_credentials.append((username, password))
-                    self.save_user_credentials()
-        except Exception as e:
-            self.settings_logger.exception(f"Error creating credentials: {e}")
+        # Check for hot corners
+        if self.settings.get('hot_corners', False):
+            pos = event.pos()
+            screen_rect = QtWidgets.QApplication.desktop().screenGeometry()
 
-    def change_password(self):
-        try:
-            users = [user[0] for user in self.user_credentials]
-            if users:
-                selected_user, ok = QInputDialog.getItem(self, 'Change Password', 'Select user:', users, editable=False)
-                if ok:
-                    new_password, ok = QInputDialog.getText(self, 'Change Password', 'Enter new password:', QLineEdit.Password)
-                    if ok:
-                        for i, user in enumerate(self.user_credentials):
-                            if user[0] == selected_user:
-                                self.user_credentials[i] = (selected_user, new_password)
-                                self.save_user_credentials()
-        except Exception as e:
-            self.logger.exception(f"Error changing password: {e}")
+            # Define corner areas (20x20 pixels in each corner)
+            corners = [
+                QtCore.QRect(0, 0, 20, 20),  # Top-left
+                QtCore.QRect(screen_rect.width() - 20, 0, 20, 20),  # Top-right
+                QtCore.QRect(0, screen_rect.height() - 20, 20, 20),  # Bottom-left
+                QtCore.QRect(screen_rect.width() - 20, screen_rect.height() - 20, 20, 20)  # Bottom-right
+            ]
 
-    def save_user_credentials(self):
-        try:
-            filename = 'credentials.csv'
-            with open(filename, 'w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(['username', 'password'])
-                writer.writerows(self.user_credentials)
-        except Exception as e:
-            self.logger.exception(f"Error saving user credentials: {e}")
+            # Check if mouse is in any corner
+            for corner in corners:
+                if corner.contains(pos):
+                    print("Hot corner detected - preventing screen lock")
+                    self.last_activity_time = QtCore.QDateTime.currentDateTime()
+                    break
 
-    def load_user_credentials(self):
-        try:
-            filename = 'credentials.csv'
-            with open(filename, 'r', newline='') as file:
-                reader = csv.reader(file)
-                user_credentials = [row for row in reader if len(row) == 2]
-                return user_credentials
-        except (FileNotFoundError, csv.Error):
-            return []
+        super().mouseMoveEvent(event)
 
-    
-#-------------------------------------------------------------------------------------------------------------
-#------------------------------------------------------------------------------------------------
-#--------------------------------------------------------------------------------------------------------------------------------
-
-
-
-
-class Login(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Login")
-
-        layout = QVBoxLayout()
-
-        label_username = QLabel("Username:")
-        self.input_username = QLineEdit()
-        layout.addWidget(label_username)
-        layout.addWidget(self.input_username)
-
-        label_password = QLabel("Password:")
-        self.input_password = QLineEdit()
-        self.input_password.setEchoMode(QLineEdit.Password)
-        layout.addWidget(label_password)
-        layout.addWidget(self.input_password)
-
-        button_login = QPushButton("Login")
-        button_login.clicked.connect(self.login)
-        layout.addWidget(button_login)
-
-        self.setLayout(layout)
-
-        self.setStyleSheet(
-            """
-            QDialog {
-                background-color: #ECECEC;
-            }
-
-            QLabel {
-                color: #333333;
-            }
-
-            QLineEdit {
-                background-color: white;
-                color: #333333;
-            }
-
-            QPushButton {
-                background-color: #007BFF;
-                color: white;
-            }
-            """
-        )
-
-    def login(self):
-        username = self.input_username.text()
-        password = self.input_password.text()
-
-        # Perform login authentication logic
-        if self.authenticate(username, password):
-            QMessageBox.information(self, "Welcome back", "Login successful. Welcome back!")
-            self.accept()
-        else:
-            QMessageBox.warning(self, "Login Failed", "Invalid username or password.")
-
-    def authenticate(self, username, password):
-        # Load credentials from a CSV file
-        with open("credentials.csv", "r") as file:
-            reader = csv.reader(file)
-            for row in reader:
-                if row[0] == username and row[1] == password:
-                    return True
-        return False
-
-
-
-
-class LockDialog(QDialog):
-    def __init__(self, ):
-        super().__init__()
-        # Rest of your code
-
-        self.setWindowTitle("Lock Screen")
-        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.SplashScreen)
-        self.setStyleSheet("background-color: black;")
-
-        layout = QVBoxLayout()
-        label = QLabel("Locked")
-        label.setStyleSheet("font-size: 24px; color: white;")
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
-
-        self.setLayout(layout)
-
-        self.setLocked(True)
-
-    def setLocked(self, locked):
-        if locked:
-            self.mousePressEvent = self.showLoginWindow
-        else:
-            self.mousePressEvent = None
-
-    def showLoginWindow(self, event):
-        login_dialog = Login(self)
-        if login_dialog.exec_() == QDialog.Accepted:
-            self.setLocked(False)
-            self.show()
-            self.close()
-
-
-    def showEvent(self, event):
-        # Set the dialog size to match the screen size
-        desktop = QApplication.desktop()
-        screen_rect = desktop.screenGeometry()
-        self.setGeometry(screen_rect)
-        
-    def keyPressEvent(self, event):
-        key = event.key()
-        if key == Qt.Key_Escape or key == Qt.Key_Q:
-            self.close()
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    main_window = MainWindow()
-    main_window.show()
-    sys.exit(app.exec_())
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    try:
+        print("Starting Lock Screen Settings...")
+        settings = SettingsPanel()
+        settings.show()
+        sys.exit(app.exec_())
+    except Exception as e:
+        print(f"Error launching settings: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        app.quit()
